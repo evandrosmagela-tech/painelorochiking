@@ -51,14 +51,15 @@
   ============================================================ */
   if (typeof game_data === 'undefined') {
     (function tentarRelogarSozinho() {
-      var mundo = null, dominio = null;
-      try {
-        mundo = localStorage.getItem('ork_ultimo_mundo');
-        dominio = localStorage.getItem('ork_ultimo_dominio');
-      } catch (e) {}
-      if (!mundo || !dominio) return;
+      var dominioAtual = window.location.hostname.replace(/^www./, '');
+      var mundo = null;
+      try { mundo = localStorage.getItem('ork_mundo_' + dominioAtual); } catch (e) {}
+      if (!mundo) {
+        console.warn('[OROCHIKING] sem mundo salvo para ' + dominioAtual + ' — faça login manual uma vez neste mundo para o relogin automático aprender.');
+        return;
+      }
 
-      var urlEntrar = 'https://www.' + dominio + '/page/join/' + mundo;
+      var urlEntrar = 'https://www.' + dominioAtual + '/page/join/' + mundo;
 
       var jaTentou = null;
       try { jaTentou = sessionStorage.getItem('ork_tentando_relogar'); } catch (e) {}
@@ -66,6 +67,7 @@
 
       try { sessionStorage.setItem('ork_tentando_relogar', urlEntrar); } catch (e) {}
 
+      console.log('[OROCHIKING] tentando relogar em', urlEntrar);
       setTimeout(function () {
         window.location.href = urlEntrar;
       }, 600);
@@ -80,8 +82,7 @@
     var __dominioBase = __partesHost.slice(1).join('.');
     var __mundoAtual = (window.game_data && window.game_data.world) ? window.game_data.world : __partesHost[0];
     if (__dominioBase && __mundoAtual) {
-      localStorage.setItem('ork_ultimo_mundo', __mundoAtual);
-      localStorage.setItem('ork_ultimo_dominio', __dominioBase);
+      localStorage.setItem('ork_mundo_' + __dominioBase, __mundoAtual);
       sessionStorage.removeItem('ork_tentando_relogar');
     }
   } catch (e) {}
