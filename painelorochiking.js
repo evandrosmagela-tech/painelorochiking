@@ -51,27 +51,40 @@
   ============================================================ */
   if (typeof game_data === 'undefined') {
     (function tentarRelogarSozinho() {
-      var mundo = null;
-      try { mundo = localStorage.getItem('ork_ultimo_mundo'); } catch (e) {}
-      if (!mundo) return;
+      var mundo = null, dominio = null;
+      try {
+        mundo = localStorage.getItem('ork_ultimo_mundo');
+        dominio = localStorage.getItem('ork_ultimo_dominio');
+      } catch (e) {}
+      if (!mundo || !dominio) return;
 
-      var tentativas = 0;
-      function tentar() {
-        tentativas++;
-        var alvo = document.querySelector(
-          'a[href*="' + mundo + '"], button[data-world*="' + mundo + '"], form[action*="' + mundo + '"] input[type="submit"]'
-        );
-        if (alvo) { alvo.click(); return; }
-        if (tentativas < 15) { setTimeout(tentar, 800); }
-      }
-      setTimeout(tentar, 500);
+      var urlEntrar = 'https://www.' + dominio + '/page/join/' + mundo;
+
+      var jaTentou = null;
+      try { jaTentou = sessionStorage.getItem('ork_tentando_relogar'); } catch (e) {}
+      if (jaTentou === urlEntrar) return; // já tentamos essa mesma URL nesta aba, evita loop
+
+      try { sessionStorage.setItem('ork_tentando_relogar', urlEntrar); } catch (e) {}
+
+      setTimeout(function () {
+        window.location.href = urlEntrar;
+      }, 600);
     })();
     return;
   }
 
   if (typeof $ === 'undefined') { return; }
 
-  try { localStorage.setItem('ork_ultimo_mundo', window.location.hostname); } catch (e) {}
+  try {
+    var __partesHost = window.location.hostname.split('.');
+    var __dominioBase = __partesHost.slice(1).join('.');
+    var __mundoAtual = (window.game_data && window.game_data.world) ? window.game_data.world : __partesHost[0];
+    if (__dominioBase && __mundoAtual) {
+      localStorage.setItem('ork_ultimo_mundo', __mundoAtual);
+      localStorage.setItem('ork_ultimo_dominio', __dominioBase);
+      sessionStorage.removeItem('ork_tentando_relogar');
+    }
+  } catch (e) {}
 
   /* ============================================================
      LIBERAÇÃO POR NICK
