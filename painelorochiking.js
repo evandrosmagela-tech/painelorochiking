@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OROCHIKING - Painel Unificado
 // @namespace    orochiking.painel
-// @version      9.0
+// @version      10.0
 // @description  Painel único (preto/dourado) OROCHIKING. Abre no Assistente de Saque, navega e ativa cada script no lugar certo (com confirmação de 1 clique pra não cair no bloqueio de popup), com monitor de captcha (alerta visual + sonoro contínuo).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -115,11 +115,15 @@
         fetch(window.location.href, { credentials: 'include' })
           .then(function (r) { return r.text(); })
           .then(function (html) {
-            if (html.indexOf('game_data') === -1) {
+            var t = html.toLowerCase();
+            var pareceDeslogado = t.indexOf('var game_data') === -1 &&
+              (t.indexOf('login_form') !== -1 || t.indexOf('page/join') !== -1 || t.indexOf('mundos actuais') !== -1 || t.indexOf('mundos atuais') !== -1);
+            if (pareceDeslogado) {
+              console.warn('[OROCHIKING] Sessão parece ter caído — recarregando.');
               window.location.reload();
             }
           })
-          .catch(function () {});
+          .catch(function (e) { console.warn('[OROCHIKING] monitor de sessão: falha ao checar', e && e.message); });
       } catch (e) {}
     }, 90000);
   })();
@@ -142,124 +146,202 @@
      Detecta o desafio anti-bot, toca um alarme, mostra um aviso grande
      e tenta parar o Farm Hard imediatamente. Some sozinho quando resolvida.
   ============================================================ */
-  (function monitorCaptcha() {
-    var SELETORES_CAPTCHA = [
-      '#bot_check', '.bot-protect-row', '#bot_check_wrapper', '.captcha',
-      '[id*="captcha" i]', '[class*="captcha" i]',
-      'iframe[src*="hcaptcha" i]', 'iframe[src*="recaptcha" i]',
-      'iframe[title*="human" i]', 'iframe[title*="challenge" i]'
-    ];
-    var TEXTOS_CAPTCHA = ['proteção contra bots', 'proteção de bot', 'sou humano'];
+  var SELETORES_CAPTCHA = [
+    '#bot_check', '.bot-protect-row', '#bot_check_wrapper', '.captcha',
+    '[id*="captcha" i]', '[class*="captcha" i]',
+    'iframe[src*="hcaptcha" i]', 'iframe[src*="recaptcha" i]',
+    'iframe[title*="human" i]', 'iframe[title*="challenge" i]'
+  ];
+  var TEXTOS_CAPTCHA = ['proteção contra bots', 'proteção de bot', 'sou humano', 'bot_check', 'bot check', 'captcha'];
 
-    function elementoVisivel(el) {
-      if (!el) return false;
-      var estilo = window.getComputedStyle ? window.getComputedStyle(el) : null;
-      return !(estilo && (estilo.display === 'none' || estilo.visibility === 'hidden'));
+  function elementoVisivel(el) {
+    if (!el) return false;
+    var estilo = window.getComputedStyle ? window.getComputedStyle(el) : null;
+    return !(estilo && (estilo.display === 'none' || estilo.visibility === 'hidden'));
+  }
+
+  function captchaNaTela() {
+    for (var i = 0; i < SELETORES_CAPTCHA.length; i++) {
+      try {
+        var el = document.querySelector(SELETORES_CAPTCHA[i]);
+        if (el && elementoVisivel(el)) { return true; }
+      } catch (e) {}
     }
-
-    function captchaNaTela() {
-      for (var i = 0; i < SELETORES_CAPTCHA.length; i++) {
-        try {
-          var el = document.querySelector(SELETORES_CAPTCHA[i]);
-          if (el && elementoVisivel(el)) { return true; }
-        } catch (e) {}
+    try {
+      var texto = (document.body.innerText || '').toLowerCase();
+      for (var j = 0; j < TEXTOS_CAPTCHA.length; j++) {
+        if (texto.indexOf(TEXTOS_CAPTCHA[j]) !== -1) { return true; }
       }
-      try {
-        var texto = (document.body.innerText || '').toLowerCase();
-        for (var j = 0; j < TEXTOS_CAPTCHA.length; j++) {
-          if (texto.indexOf(TEXTOS_CAPTCHA[j]) !== -1) { return true; }
-        }
-      } catch (e) {}
-      return false;
+    } catch (e) {}
+    return false;
+  }
+
+  function textoIndicaCaptcha(texto) {
+    if (!texto) return false;
+    var t = String(texto).toLowerCase();
+    for (var i = 0; i < TEXTOS_CAPTCHA.length; i++) {
+      if (t.indexOf(TEXTOS_CAPTCHA[i]) !== -1) { return true; }
     }
+    return false;
+  }
 
-    var alarmeAtivo = false;
-    var audioCtx = null;
+  var alarmeAtivo = false;
+  var audioCtx = null;
+  var pararSomAtual = null;
+  var reloadTentadoParaCaptcha = false;
 
-    function tocarAlarme() {
-      try {
-        if (!audioCtx) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
-        var tocando = true;
-        var grave = false;
-        function bipe() {
-          if (!tocando || !alarmeAtivo) return;
-          if (audioCtx.state === 'suspended') { audioCtx.resume(); }
-          var osc = audioCtx.createOscillator();
-          var gain = audioCtx.createGain();
-          osc.type = 'square';
-          osc.frequency.setValueAtTime(grave ? 620 : 1250, audioCtx.currentTime);
-          gain.gain.setValueAtTime(0.001, audioCtx.currentTime);
-          gain.gain.exponentialRampToValueAtTime(0.5, audioCtx.currentTime + 0.02);
-          gain.gain.setValueAtTime(0.5, audioCtx.currentTime + 0.16);
-          gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.2);
-          osc.connect(gain);
-          gain.connect(audioCtx.destination);
-          osc.start();
-          osc.stop(audioCtx.currentTime + 0.22);
-          grave = !grave;
-          setTimeout(bipe, 220);
-        }
-        bipe();
-        return function pararSom() { tocando = false; };
-      } catch (e) { return function () {}; }
-    }
+  function tocarAlarme() {
+    try {
+      if (!audioCtx) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+      var tocando = true;
+      var grave = false;
+      function bipe() {
+        if (!tocando || !alarmeAtivo) return;
+        if (audioCtx.state === 'suspended') { audioCtx.resume(); }
+        var osc = audioCtx.createOscillator();
+        var gain = audioCtx.createGain();
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(grave ? 620 : 1250, audioCtx.currentTime);
+        gain.gain.setValueAtTime(0.001, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.5, audioCtx.currentTime + 0.02);
+        gain.gain.setValueAtTime(0.5, audioCtx.currentTime + 0.16);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.2);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.22);
+        grave = !grave;
+        setTimeout(bipe, 220);
+      }
+      bipe();
+      return function pararSom() { tocando = false; };
+    } catch (e) { return function () {}; }
+  }
 
-    var pararSomAtual = null;
+  function pararFarmHard() {
+    try {
+      var fechar = document.getElementById('fh-fechar');
+      if (fechar) { fechar.click(); return; }
+      var pausar = document.getElementById('fh-pausar');
+      if (pausar) { pausar.click(); }
+    } catch (e) {}
+    try {
+      if (window.__ORK_ColetorFarmInterval) {
+        clearInterval(window.__ORK_ColetorFarmInterval);
+        window.__ORK_ColetorFarmInterval = null;
+      }
+    } catch (e) {}
+    try { if (typeof pararCunharPorSeguranca === 'function') pararCunharPorSeguranca(); } catch (e) {}
+    try { localStorage.removeItem('ork_retomar_dormindo'); } catch (e) {}
+  }
 
-    function pararFarmHard() {
-      try {
-        var fechar = document.getElementById('fh-fechar');
-        if (fechar) { fechar.click(); return; }
-        var pausar = document.getElementById('fh-pausar');
-        if (pausar) { pausar.click(); }
-      } catch (e) {}
-      try {
-        if (window.__ORK_ColetorFarmInterval) {
-          clearInterval(window.__ORK_ColetorFarmInterval);
-          window.__ORK_ColetorFarmInterval = null;
-        }
-      } catch (e) {}
-      try { if (typeof pararCunharPorSeguranca === 'function') pararCunharPorSeguranca(); } catch (e) {}
-      try { localStorage.removeItem('ork_retomar_dormindo'); } catch (e) {}
-    }
+  function mostrarOverlay() {
+    if (document.getElementById('ork-captcha-overlay')) return;
+    var estilo = document.createElement('style');
+    estilo.id = 'ork-captcha-estilo';
+    estilo.textContent =
+      '@keyframes ork-pulsar{0%{background:#7a0000}50%{background:#c40000}100%{background:#7a0000}}' +
+      '#ork-captcha-overlay{position:fixed;top:0;left:0;right:0;padding:16px;text-align:center;' +
+      'z-index:9999999;color:#fff;font-family:Verdana,Arial,sans-serif;font-weight:800;font-size:16px;' +
+      'letter-spacing:.5px;box-shadow:0 4px 24px rgba(0,0,0,.6);animation:ork-pulsar 1s infinite}';
+    document.head.appendChild(estilo);
+    var overlay = document.createElement('div');
+    overlay.id = 'ork-captcha-overlay';
+    overlay.textContent = '🚨 CAPTCHA DETECTADO — SCRIPTS PARADOS. RESOLVA AGORA! 🚨';
+    document.body.appendChild(overlay);
+  }
 
-    function mostrarOverlay() {
-      if (document.getElementById('ork-captcha-overlay')) return;
-      var estilo = document.createElement('style');
-      estilo.id = 'ork-captcha-estilo';
-      estilo.textContent =
-        '@keyframes ork-pulsar{0%{background:#7a0000}50%{background:#c40000}100%{background:#7a0000}}' +
-        '#ork-captcha-overlay{position:fixed;top:0;left:0;right:0;padding:16px;text-align:center;' +
-        'z-index:9999999;color:#fff;font-family:Verdana,Arial,sans-serif;font-weight:800;font-size:16px;' +
-        'letter-spacing:.5px;box-shadow:0 4px 24px rgba(0,0,0,.6);animation:ork-pulsar 1s infinite}';
-      document.head.appendChild(estilo);
-      var overlay = document.createElement('div');
-      overlay.id = 'ork-captcha-overlay';
-      overlay.textContent = '🚨 CAPTCHA DETECTADO — SCRIPTS PARADOS. RESOLVA AGORA! 🚨';
-      document.body.appendChild(overlay);
-    }
+  function removerOverlay() {
+    var overlay = document.getElementById('ork-captcha-overlay');
+    if (overlay) overlay.remove();
+    var estilo = document.getElementById('ork-captcha-estilo');
+    if (estilo) estilo.remove();
+  }
 
-    function removerOverlay() {
-      var overlay = document.getElementById('ork-captcha-overlay');
-      if (overlay) overlay.remove();
-      var estilo = document.getElementById('ork-captcha-estilo');
-      if (estilo) estilo.remove();
-    }
+  /* ============================================================
+     ATIVAR/DESATIVAR MODO CAPTCHA — chamado tanto pela checagem
+     visual (DOM, a cada 1,2s) quanto pela inspeção das respostas
+     de rede (instantâneo, no mesmo request que revelou o captcha).
+  ============================================================ */
+  function ativarModoCaptcha() {
+    window.__ORK_CAPTCHA_BLOQUEADO__ = true;
+    if (alarmeAtivo) return;
+    alarmeAtivo = true;
+    pararFarmHard();
+    mostrarOverlay();
+    pararSomAtual = tocarAlarme();
+    console.warn('[OROCHIKING] Captcha detectado — todas as requisições pausadas.');
 
+    reloadTentadoParaCaptcha = false;
+    setTimeout(function () {
+      if (!reloadTentadoParaCaptcha && alarmeAtivo && !captchaNaTela()) {
+        reloadTentadoParaCaptcha = true;
+        console.warn('[OROCHIKING] Tela não mostrou o captcha sozinha — recarregando para exibir corretamente.');
+        window.location.reload();
+      }
+    }, 2500);
+  }
+
+  function desativarModoCaptcha() {
+    window.__ORK_CAPTCHA_BLOQUEADO__ = false;
+    if (!alarmeAtivo) return;
+    alarmeAtivo = false;
+    removerOverlay();
+    if (pararSomAtual) { pararSomAtual(); pararSomAtual = null; }
+  }
+
+  (function monitorCaptchaVisual() {
     setInterval(function () {
-      var achou = captchaNaTela();
-      if (achou && !alarmeAtivo) {
-        alarmeAtivo = true;
-        pararFarmHard();
-        mostrarOverlay();
-        pararSomAtual = tocarAlarme();
-        console.warn('[OROCHIKING] Captcha detectado — scripts pausados.');
-      } else if (!achou && alarmeAtivo) {
-        alarmeAtivo = false;
-        removerOverlay();
-        if (pararSomAtual) { pararSomAtual(); pararSomAtual = null; }
-      }
+      if (captchaNaTela()) { ativarModoCaptcha(); }
+      else { desativarModoCaptcha(); }
     }, 1200);
+  })();
+
+  /* ============================================================
+     INTERCEPTOR DE REDE — inspeciona as respostas em busca de
+     sinais de captcha (mais rápido que esperar o DOM atualizar) e
+     BLOQUEIA qualquer requisição nova enquanto o captcha durar,
+     pra não escalar pra um captcha mais chato.
+  ============================================================ */
+  (function interceptarRede() {
+    try {
+      var fetchOriginal = window.fetch;
+      if (fetchOriginal) {
+        window.fetch = function (input, init) {
+          if (window.__ORK_CAPTCHA_BLOQUEADO__) {
+            return Promise.reject(new Error('OROCHIKING: requisição bloqueada (captcha ativo)'));
+          }
+          return fetchOriginal.call(window, input, init).then(function (resposta) {
+            try {
+              resposta.clone().text().then(function (texto) {
+                if (textoIndicaCaptcha(texto)) { ativarModoCaptcha(); }
+              }).catch(function () {});
+            } catch (e) {}
+            return resposta;
+          });
+        };
+      }
+    } catch (e) {}
+
+    try {
+      var xhrOpenOriginal = XMLHttpRequest.prototype.open;
+      var xhrSendOriginal = XMLHttpRequest.prototype.send;
+
+      XMLHttpRequest.prototype.open = function () {
+        return xhrOpenOriginal.apply(this, arguments);
+      };
+
+      XMLHttpRequest.prototype.send = function () {
+        if (window.__ORK_CAPTCHA_BLOQUEADO__) { return; }
+        var xhr = this;
+        try {
+          xhr.addEventListener('load', function () {
+            try { if (textoIndicaCaptcha(xhr.responseText)) { ativarModoCaptcha(); } } catch (e) {}
+          });
+        } catch (e) {}
+        return xhrSendOriginal.apply(xhr, arguments);
+      };
+    } catch (e) {}
   })();
 
   /* ============================================================
@@ -312,16 +394,18 @@
             try { localStorage.removeItem('ork_retomar_dormindo'); } catch (e) {}
           });
         }
+        var iniciar = document.getElementById('fh-iniciar');
+        if (iniciar) { iniciar.click(); }
       } catch (e) {
         console.error('[OROCHIKING] erro ao configurar Farm Dormindo', e);
       }
-    }, 400);
+    }, 600);
   }
 
   function checaAtaque() {
     return !!(window.game_data && game_data.screen === 'overview_villages' && game_data.mode === 'combined');
   }
-  function rodarAtaque() {
+  function rodarAtaqueOriginal() {
     (function () {
       if (1) {
         // ==========================================================
@@ -1663,6 +1747,39 @@
     })();
     
   }
+  function adicionarLoopAtaque() {
+    var botaoRepetir = document.getElementById('amxRepeatBtn');
+    if (!botaoRepetir || document.getElementById('ork-loop-ataque')) return;
+
+    var label = document.createElement('label');
+    label.id = 'ork-loop-ataque';
+    label.style.cssText = 'display:flex;align-items:center;gap:7px;font-size:11.5px;color:#d8d8d8;' +
+      'margin-top:10px;cursor:pointer;font-family:Segoe UI,Arial,sans-serif;user-select:none';
+    label.innerHTML = '<input type="checkbox" id="ork-loop-ataque-check" style="width:auto"> ' +
+      '🔁 Repetir automaticamente sempre que as tropas voltarem (loop)';
+    botaoRepetir.parentNode.insertBefore(label, botaoRepetir.nextSibling);
+
+    var check = document.getElementById('ork-loop-ataque-check');
+    try { check.checked = localStorage.getItem('ork_loop_ataque_ativo') === '1'; } catch (e) {}
+    check.addEventListener('change', function (e) {
+      try { localStorage.setItem('ork_loop_ataque_ativo', e.target.checked ? '1' : '0'); } catch (err) {}
+    });
+
+    if (window.__ORK_LoopAtaqueObserver) { window.__ORK_LoopAtaqueObserver.disconnect(); }
+    var observer = new MutationObserver(function () {
+      var checkAtual = document.getElementById('ork-loop-ataque-check');
+      var btnAtual = document.getElementById('amxRepeatBtn');
+      if (checkAtual && checkAtual.checked && btnAtual && !btnAtual.disabled) {
+        btnAtual.click();
+      }
+    });
+    observer.observe(botaoRepetir, { attributes: true, attributeFilter: ['disabled', 'class'] });
+    window.__ORK_LoopAtaqueObserver = observer;
+  }
+  function rodarAtaque() {
+    rodarAtaqueOriginal();
+    setTimeout(adicionarLoopAtaque, 500);
+  }
 
   function checaRename() {
     return !!(window.game_data && game_data.screen === 'overview_villages' && game_data.mode === 'combined');
@@ -2283,8 +2400,8 @@
     if (document.getElementById('ork-cunhar-status')) return;
     var caixa = document.createElement('div');
     caixa.id = 'ork-cunhar-status';
-    caixa.style.cssText = 'position:fixed;bottom:20px;left:20px;background:linear-gradient(160deg,#181818,#050505);' +
-      'border:1px solid #3a3a3a;border-radius:12px;padding:10px 14px;z-index:9999996;width:210px;' +
+    caixa.style.cssText = 'position:fixed;bottom:20px;left:20px;background:linear-gradient(165deg,rgba(26,26,26,.97),rgba(8,8,8,.98));' +
+      'border:1px solid #3a3a3a;border-radius:14px;padding:12px 16px;z-index:9999996;width:210px;' +
       'font-family:Verdana,Arial,sans-serif;color:#eee;box-shadow:0 14px 34px rgba(0,0,0,.75);font-size:11.5px';
     caixa.innerHTML =
       '<div style="font-weight:800;color:#ffd84d;margin-bottom:6px">🪙 Cunhagem automática ativa</div>' +
@@ -2303,8 +2420,8 @@
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999998;' +
       'display:flex;align-items:center;justify-content:center;font-family:Verdana,Arial,sans-serif';
     overlay.innerHTML =
-      '<div style="background:linear-gradient(160deg,#181818,#050505);border:1px solid #3a3a3a;' +
-      'border-radius:12px;padding:18px 20px;width:280px;color:#eee;box-shadow:0 14px 34px rgba(0,0,0,.75)">' +
+      '<div style="background:linear-gradient(165deg,rgba(26,26,26,.97),rgba(8,8,8,.98));border:1px solid #3a3a3a;' +
+      'border-radius:16px;padding:20px 22px;width:280px;color:#eee;box-shadow:0 14px 34px rgba(0,0,0,.75)">' +
         '<div style="font-weight:800;color:#ffd84d;margin-bottom:10px">🪙 Cunhar Moedas Automático</div>' +
         '<div style="font-size:11.5px;color:#9a9a9a;margin-bottom:10px">Cunha agora e recarrega a página no intervalo abaixo, repetindo sozinho:</div>' +
         '<div style="display:flex;gap:8px;margin-bottom:12px">' +
@@ -2318,7 +2435,7 @@
         '<div style="display:flex;gap:8px">' +
           '<button id="ork-cunhar-cancelar" style="flex:1;background:#232323;color:#ccc;border:1px solid #3a3a3a;' +
             'border-radius:7px;padding:8px 0;cursor:pointer;font-weight:700;font-size:11.5px">Cancelar</button>' +
-          '<button id="ork-cunhar-iniciar" style="flex:1;background:linear-gradient(100deg,#f0b90b,#ffd84d);' +
+          '<button id="ork-cunhar-iniciar" style="flex:1;background:linear-gradient(100deg,#e8ac0a,#ffdc63);' +
             'color:#141200;border:none;border-radius:7px;padding:8px 0;cursor:pointer;font-weight:800;font-size:11.5px">Iniciar</button>' +
         '</div>' +
       '</div>';
@@ -2562,12 +2679,12 @@
     if (document.getElementById('ork-confirmar')) return;
     var caixa = document.createElement('div');
     caixa.id = 'ork-confirmar';
-    caixa.style.cssText = 'position:fixed;bottom:20px;right:20px;background:linear-gradient(160deg,#181818,#050505);' +
+    caixa.style.cssText = 'position:fixed;bottom:20px;right:20px;background:linear-gradient(165deg,rgba(26,26,26,.97),rgba(8,8,8,.98));' +
       'border:1px solid #3a3a3a;border-radius:12px;padding:12px 14px;z-index:9999997;width:220px;' +
       'font-family:Verdana,Arial,sans-serif;color:#eee;box-shadow:0 14px 34px rgba(0,0,0,.75)';
     caixa.innerHTML =
       '<div style="font-weight:800;color:#ffd84d;margin-bottom:8px;font-size:12.5px">' + f.icone + ' ' + f.nome + ' pronto</div>' +
-      '<button id="ork-confirmar-btn" style="width:100%;background:linear-gradient(100deg,#f0b90b,#ffd84d);' +
+      '<button id="ork-confirmar-btn" style="width:100%;background:linear-gradient(100deg,#e8ac0a,#ffdc63);' +
         'color:#141200;border:none;border-radius:7px;padding:8px 10px;cursor:pointer;font-weight:800;font-size:12px">Ativar agora</button>';
     document.body.appendChild(caixa);
     document.getElementById('ork-confirmar-btn').addEventListener('click', function () {
@@ -2640,8 +2757,8 @@
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999998;' +
       'display:flex;align-items:center;justify-content:center;font-family:Verdana,Arial,sans-serif';
     overlay.innerHTML =
-      '<div style="background:linear-gradient(160deg,#181818,#050505);border:1px solid #3a3a3a;' +
-      'border-radius:12px;padding:18px 20px;width:280px;color:#eee;box-shadow:0 14px 34px rgba(0,0,0,.75)">' +
+      '<div style="background:linear-gradient(165deg,rgba(26,26,26,.97),rgba(8,8,8,.98));border:1px solid #3a3a3a;' +
+      'border-radius:16px;padding:20px 22px;width:280px;color:#eee;box-shadow:0 14px 34px rgba(0,0,0,.75)">' +
         '<div style="font-weight:800;color:#ffd84d;margin-bottom:10px">' + f.icone + ' ' + f.nome + '</div>' +
         '<div style="font-size:11.5px;color:#9a9a9a;margin-bottom:10px">Digite o nick exato do jogador:</div>' +
         '<input id="ork-nick-input" type="text" placeholder="Ex: Orochi.2009" ' +
@@ -2650,7 +2767,7 @@
         '<div style="display:flex;gap:8px">' +
           '<button id="ork-nick-cancelar" style="flex:1;background:#232323;color:#ccc;border:1px solid #3a3a3a;' +
             'border-radius:7px;padding:8px 0;cursor:pointer;font-weight:700;font-size:11.5px">Cancelar</button>' +
-          '<button id="ork-nick-buscar" style="flex:1;background:linear-gradient(100deg,#f0b90b,#ffd84d);' +
+          '<button id="ork-nick-buscar" style="flex:1;background:linear-gradient(100deg,#e8ac0a,#ffdc63);' +
             'color:#141200;border:none;border-radius:7px;padding:8px 0;cursor:pointer;font-weight:800;font-size:11.5px">Buscar</button>' +
         '</div>' +
       '</div>';
@@ -2690,31 +2807,45 @@
      ESTILO
   ============================================================ */
   var css = `
-    #ork-painel{position:fixed;top:60px;right:16px;width:360px;background:linear-gradient(160deg,#181818,#050505);
-      border:1px solid #3a3a3a;border-radius:14px;box-shadow:0 14px 34px rgba(0,0,0,.75),0 0 0 1px rgba(255,196,0,.14);
-      font-family:Verdana,Arial,sans-serif;color:#eee;z-index:999999;overflow:hidden}
-    #ork-header{background:linear-gradient(100deg,#f0b90b,#ffd84d 55%,#f0b90b);color:#141200;padding:11px 14px;
-      display:flex;justify-content:space-between;align-items:center;cursor:move;user-select:none}
-    #ork-header .ork-title{font-weight:800;font-size:14px;letter-spacing:.8px;display:flex;align-items:center;gap:8px}
-    #ork-header .ork-badge{background:#141200;color:#ffc400;font-size:10px;font-weight:800;padding:2px 7px;border-radius:9px}
-    #ork-header .ork-btns{display:flex;gap:6px}
-    #ork-header button{cursor:pointer;border:none;background:transparent;color:#141200;font-weight:800;font-size:15px;
-      width:20px;height:20px;line-height:20px;border-radius:50%}
-    #ork-header button:hover{background:rgba(0,0,0,.18)}
-    #ork-tabs{display:flex;flex-wrap:wrap;gap:4px;padding:8px 8px 6px;border-bottom:1px solid #262626;background:#101010}
-    .ork-tab{flex:1 1 auto;min-width:74px;background:#1c1c1c;border:1px solid #2c2c2c;color:#bbb;font-size:10.5px;
-      font-weight:700;padding:6px 4px;border-radius:7px;cursor:pointer;text-align:center;white-space:nowrap}
-    .ork-tab:hover{border-color:#665400;color:#eee}
-    .ork-tab.ork-tab-ativa{background:linear-gradient(100deg,#f0b90b,#ffd84d);color:#141200;border-color:#f0b90b}
-    #ork-body{padding:14px}
-    #ork-content-titulo{font-size:14px;font-weight:800;color:#ffd84d;margin-bottom:6px;display:flex;align-items:center;gap:7px}
-    .ork-tag-tipo{font-size:9px;font-weight:800;color:#141200;background:#ffc400;padding:2px 7px;border-radius:8px;letter-spacing:.3px}
-    #ork-content-dica{font-size:11.5px;color:#9a9a9a;line-height:1.5;margin-bottom:12px;min-height:34px}
-    .ork-btn-grande{width:100%;background:linear-gradient(100deg,#f0b90b,#ffd84d);color:#141200;border:none;
-      border-radius:8px;font-weight:800;font-size:13px;padding:10px 12px;cursor:pointer}
-    .ork-btn-grande:hover{filter:brightness(1.08)}
-    #ork-status{font-size:10.5px;color:#ff9d5c;margin-top:10px;min-height:14px;line-height:1.4}
-    #ork-footer{font-size:10px;color:#666;text-align:center;padding:8px 0 10px;border-top:1px solid #262626}
+    #ork-painel{position:fixed;top:60px;right:16px;width:368px;
+      background:linear-gradient(165deg,rgba(26,26,26,.97),rgba(8,8,8,.98));
+      backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+      border:1px solid rgba(255,196,0,.16);border-radius:18px;
+      box-shadow:0 24px 60px rgba(0,0,0,.55),0 2px 0 rgba(255,255,255,.03) inset,0 0 0 1px rgba(0,0,0,.4);
+      font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Roboto,Arial,sans-serif;
+      color:#ececec;z-index:999999;overflow:hidden;transition:box-shadow .2s ease}
+    #ork-header{background:linear-gradient(100deg,#e8ac0a,#ffdc63 50%,#e8ac0a);color:#1a1400;padding:13px 16px;
+      display:flex;justify-content:space-between;align-items:center;cursor:move;user-select:none;
+      box-shadow:0 1px 0 rgba(255,255,255,.35) inset}
+    #ork-header .ork-title{font-weight:800;font-size:13.5px;letter-spacing:1.1px;display:flex;align-items:center;gap:8px;
+      text-transform:uppercase}
+    #ork-header .ork-badge{background:#1a1400;color:#ffcf3d;font-size:9.5px;font-weight:800;padding:3px 8px;
+      border-radius:20px;letter-spacing:.4px}
+    #ork-header .ork-btns{display:flex;gap:5px}
+    #ork-header button{cursor:pointer;border:none;background:rgba(0,0,0,.08);color:#1a1400;font-weight:800;font-size:14px;
+      width:22px;height:22px;line-height:22px;border-radius:50%;transition:background .15s ease,transform .15s ease}
+    #ork-header button:hover{background:rgba(0,0,0,.22);transform:scale(1.08)}
+    #ork-tabs{display:flex;flex-wrap:wrap;gap:5px;padding:10px 10px 8px;border-bottom:1px solid rgba(255,255,255,.06);
+      background:rgba(0,0,0,.22)}
+    .ork-tab{flex:1 1 auto;min-width:76px;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.06);
+      color:#a8a8a8;font-size:10.5px;font-weight:600;padding:7px 5px;border-radius:9px;cursor:pointer;
+      text-align:center;white-space:nowrap;transition:all .16s ease}
+    .ork-tab:hover{border-color:rgba(255,196,0,.35);color:#f2f2f2;background:rgba(255,255,255,.06)}
+    .ork-tab.ork-tab-ativa{background:linear-gradient(100deg,#e8ac0a,#ffdc63);color:#1a1400;border-color:transparent;
+      box-shadow:0 4px 14px rgba(232,172,10,.35);font-weight:800}
+    #ork-body{padding:16px}
+    #ork-content-titulo{font-size:15px;font-weight:800;color:#ffd84d;margin-bottom:8px;display:flex;align-items:center;gap:8px;
+      letter-spacing:.2px}
+    .ork-tag-tipo{font-size:9px;font-weight:800;color:#1a1400;background:linear-gradient(100deg,#ffc400,#ffe27a);
+      padding:2px 8px;border-radius:9px;letter-spacing:.3px}
+    #ork-content-dica{font-size:11.5px;color:#9b9b9b;line-height:1.55;margin-bottom:14px;min-height:34px}
+    .ork-btn-grande{width:100%;background:linear-gradient(100deg,#e8ac0a,#ffdc63);color:#1a1400;border:none;
+      border-radius:10px;font-weight:800;font-size:13px;padding:11px 12px;cursor:pointer;letter-spacing:.3px;
+      box-shadow:0 6px 16px rgba(232,172,10,.25);transition:transform .12s ease,box-shadow .12s ease}
+    .ork-btn-grande:hover{transform:translateY(-1px);box-shadow:0 8px 20px rgba(232,172,10,.4)}
+    .ork-btn-grande:active{transform:translateY(0)}
+    #ork-status{font-size:10.5px;color:#ff9d5c;margin-top:12px;min-height:14px;line-height:1.4}
+    #ork-footer{font-size:9.5px;color:#5c5c5c;text-align:center;padding:9px 0 11px;border-top:1px solid rgba(255,255,255,.05)}
   `;
   var styleEl = document.createElement('style');
   styleEl.id = 'ork-style';
