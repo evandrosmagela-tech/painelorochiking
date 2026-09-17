@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OROCHIKING - Painel Unificado
 // @namespace    orochiking.painel
-// @version      10.0
+// @version      11.0
 // @description  Painel único (preto/dourado) OROCHIKING. Abre no Assistente de Saque, navega e ativa cada script no lugar certo (com confirmação de 1 clique pra não cair no bloqueio de popup), com monitor de captcha (alerta visual + sonoro contínuo).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -188,7 +188,6 @@
   var alarmeAtivo = false;
   var audioCtx = null;
   var pararSomAtual = null;
-  var reloadTentadoParaCaptcha = false;
 
   function tocarAlarme() {
     try {
@@ -271,15 +270,6 @@
     mostrarOverlay();
     pararSomAtual = tocarAlarme();
     console.warn('[OROCHIKING] Captcha detectado — todas as requisições pausadas.');
-
-    reloadTentadoParaCaptcha = false;
-    setTimeout(function () {
-      if (!reloadTentadoParaCaptcha && alarmeAtivo && !captchaNaTela()) {
-        reloadTentadoParaCaptcha = true;
-        console.warn('[OROCHIKING] Tela não mostrou o captcha sozinha — recarregando para exibir corretamente.');
-        window.location.reload();
-      }
-    }, 2500);
   }
 
   function desativarModoCaptcha() {
@@ -813,6 +803,8 @@
             count = 0,
             i = 0;
           aldeiasLength = aldeias.length;
+          var totalPrimeiraPassada = aldeias.length; // fixo: não muda mesmo com erros removendo aldeias durante a passada
+          var concluidosPrimeiraPassada = 0; // conta CADA resposta (sucesso ou erro) uma única vez
           for (let aldeia of aldeias) {
             setTimeout(
               function () {
@@ -916,7 +908,7 @@
                         tropas.support = "l";
                       } else {
                         UI.ErrorMessage("Tipo de comando não especificado!");
-                        throw error;
+                        throw new Error("Tipo de comando não especificado!");
                       }
                       aldeia.data = tropas;
                       i++;
@@ -924,20 +916,19 @@
                       removeVillage(aldeia.id);
                       console.log("First Request: " + data.error);
                     }
-                    if (i == aldeias.length) secondRequest();
+                    concluidosPrimeiraPassada++;
+                    if (concluidosPrimeiraPassada == totalPrimeiraPassada) secondRequest();
                   },
                   error: function (data) {
                     progressTick();
                     console.log("Error First Request: " + data.status + " {" + data.error + "}");
-                    if (data.status == 429 || data.status == 405) {
-                      removeVillage(aldeia.id);
-                      aldeiasAux.push(aldeia);
-                      aldeiasLength--;
-                    } else {
-                      alert("Programa caiu, erro inesperado: {" + data.error + "}");
-                      throw error;
-                    }
-                    if (i == aldeias.length) secondRequest();
+                    // Qualquer erro (não só 429/405) volta pra fila de retry — antes isso
+                    // travava a passada inteira (throw quebrado), deixando aldeias sem enviar.
+                    removeVillage(aldeia.id);
+                    aldeiasAux.push(aldeia);
+                    aldeiasLength--;
+                    concluidosPrimeiraPassada++;
+                    if (concluidosPrimeiraPassada == totalPrimeiraPassada) secondRequest();
                   },
                 });
               },
@@ -1060,15 +1051,12 @@
               error: function (data) {
                 stopCountdown(aldeia.rowIndex);
                 console.log("Error Third Request: " + data.status + " {" + data.error + "}");
-                if (data.status == 429 || data.status == 405) {
-                  removeVillage(aldeia.id);
-                  removeVillageAux(aldeia.id);
-                  aldeiasAux.push(aldeia);
-                  aldeiasLength--;
-                } else {
-                  alert("Programa caiu, erro inesperado: {" + data.error + "}");
-                  throw error;
-                }
+                // Qualquer erro (não só 429/405) volta pra fila de retry — antes isso
+                // travava a passada inteira (throw quebrado), deixando aldeias sem enviar.
+                removeVillage(aldeia.id);
+                removeVillageAux(aldeia.id);
+                aldeiasAux.push(aldeia);
+                aldeiasLength--;
                 onSendSettled();
               },
             });
@@ -1106,6 +1094,8 @@
         secondRequest = function () {
           let count = 0,
             i = 0;
+          var totalSegundaPassada = aldeias.length; // fixo: não muda mesmo com erros removendo aldeias durante a passada
+          var concluidosSegundaPassada = 0; // conta CADA resposta (sucesso ou erro) uma única vez
           if (deuError) {
             $("#combined_table tbody tr").remove();
             $("#combined_table tbody").append(resultHeaderRow());
@@ -1202,7 +1192,8 @@
                       removeVillage(aldeia.id);
                       aldeiasLength--;
                     }
-                    if (i == aldeias.length) {
+                    concluidosSegundaPassada++;
+                    if (concluidosSegundaPassada == totalSegundaPassada) {
                       progressHide();
                       $("#listCommands").before(
                         "<p>Engatilhados " + confirmedForSend + " comando(s) — enviando automaticamente no ritmo de ~5/seg...</p>"
@@ -1214,16 +1205,14 @@
                   error: function (data) {
                     progressTick();
                     console.log("Error Second Request: " + data.status + " {" + data.error + "}");
-                    if (data.status == 429 || data.status == 405) {
-                      removeVillage(aldeia.id);
-                      removeVillageAux(aldeia.id);
-                      aldeiasAux.push(aldeia);
-                      aldeiasLength--;
-                    } else {
-                      alert("Programa caiu, erro inesperado: {" + data.error + "}");
-                      throw error;
-                    }
-                    if (i == aldeias.length) {
+                    // Qualquer erro (não só 429/405) volta pra fila de retry — antes isso
+                    // travava a passada inteira (throw quebrado), deixando aldeias sem enviar.
+                    removeVillage(aldeia.id);
+                    removeVillageAux(aldeia.id);
+                    aldeiasAux.push(aldeia);
+                    aldeiasLength--;
+                    concluidosSegundaPassada++;
+                    if (concluidosSegundaPassada == totalSegundaPassada) {
                       progressHide();
                       $("#listCommands").before(
                         "<p>Engatilhados " + confirmedForSend + " comando(s) — enviando automaticamente no ritmo de ~5/seg...</p>"
@@ -1751,30 +1740,129 @@
     var botaoRepetir = document.getElementById('amxRepeatBtn');
     if (!botaoRepetir || document.getElementById('ork-loop-ataque')) return;
 
-    var label = document.createElement('label');
-    label.id = 'ork-loop-ataque';
-    label.style.cssText = 'display:flex;align-items:center;gap:7px;font-size:11.5px;color:#d8d8d8;' +
-      'margin-top:10px;cursor:pointer;font-family:Segoe UI,Arial,sans-serif;user-select:none';
-    label.innerHTML = '<input type="checkbox" id="ork-loop-ataque-check" style="width:auto"> ' +
-      '🔁 Repetir automaticamente sempre que as tropas voltarem (loop)';
-    botaoRepetir.parentNode.insertBefore(label, botaoRepetir.nextSibling);
+    var CHAVE_CFG = 'ork_loop_ataque_config';
+    function lerConfigLoop() {
+      try {
+        var bruto = localStorage.getItem(CHAVE_CFG);
+        return bruto ? JSON.parse(bruto) : { ativo: false, min: 4, seg: 30 };
+      } catch (e) { return { ativo: false, min: 4, seg: 30 }; }
+    }
+    function gravarConfigLoop(cfg) {
+      try { localStorage.setItem(CHAVE_CFG, JSON.stringify(cfg)); } catch (e) {}
+    }
+
+    var caixa = document.createElement('div');
+    caixa.id = 'ork-loop-ataque';
+    caixa.style.cssText = 'margin-top:12px;padding:10px 12px;background:rgba(255,255,255,.03);' +
+      'border:1px solid rgba(255,255,255,.08);border-radius:10px;font-family:Segoe UI,Arial,sans-serif';
+    caixa.innerHTML =
+      '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11.5px;color:#d8d8d8;user-select:none">' +
+        '<input type="checkbox" id="ork-loop-ataque-check" style="width:auto"> ' +
+        '🔁 Repetir esta lista sozinho, de tempos em tempos' +
+      '</label>' +
+      '<div style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:11px;color:#bbb">' +
+        'Repetir a cada ' +
+        '<input type="number" id="ork-loop-ataque-min" min="0" style="width:46px;background:#111;border:1px solid #444;color:#eee;border-radius:5px;padding:3px 5px"> min ' +
+        '<input type="number" id="ork-loop-ataque-seg" min="0" max="59" style="width:46px;background:#111;border:1px solid #444;color:#eee;border-radius:5px;padding:3px 5px"> s' +
+      '</div>' +
+      '<div id="ork-loop-ataque-status" style="font-size:10.5px;color:#f0b90b;margin-top:6px;min-height:13px"></div>';
+    botaoRepetir.parentNode.insertBefore(caixa, botaoRepetir.nextSibling);
 
     var check = document.getElementById('ork-loop-ataque-check');
-    try { check.checked = localStorage.getItem('ork_loop_ataque_ativo') === '1'; } catch (e) {}
-    check.addEventListener('change', function (e) {
-      try { localStorage.setItem('ork_loop_ataque_ativo', e.target.checked ? '1' : '0'); } catch (err) {}
-    });
+    var inputMin = document.getElementById('ork-loop-ataque-min');
+    var inputSeg = document.getElementById('ork-loop-ataque-seg');
+    var status = document.getElementById('ork-loop-ataque-status');
 
-    if (window.__ORK_LoopAtaqueObserver) { window.__ORK_LoopAtaqueObserver.disconnect(); }
-    var observer = new MutationObserver(function () {
-      var checkAtual = document.getElementById('ork-loop-ataque-check');
-      var btnAtual = document.getElementById('amxRepeatBtn');
-      if (checkAtual && checkAtual.checked && btnAtual && !btnAtual.disabled) {
-        btnAtual.click();
+    var cfg = lerConfigLoop();
+    check.checked = cfg.ativo;
+    inputMin.value = cfg.min;
+    inputSeg.value = cfg.seg;
+
+    function salvarConfigAtual() {
+      gravarConfigLoop({
+        ativo: check.checked,
+        min: parseInt(inputMin.value, 10) || 0,
+        seg: parseInt(inputSeg.value, 10) || 0
+      });
+    }
+    check.addEventListener('change', function () {
+      salvarConfigAtual();
+      if (!check.checked && window.__ORK_LoopAtaqueTimeoutId) {
+        clearTimeout(window.__ORK_LoopAtaqueTimeoutId);
+        window.__ORK_LoopAtaqueTimeoutId = null;
+        status.textContent = '';
       }
     });
-    observer.observe(botaoRepetir, { attributes: true, attributeFilter: ['disabled', 'class'] });
-    window.__ORK_LoopAtaqueObserver = observer;
+    inputMin.addEventListener('change', salvarConfigAtual);
+    inputSeg.addEventListener('change', salvarConfigAtual);
+
+    // ------------------------------------------------------------
+    // Reaciona a mesma leva (normal ou Demolidor, o que tiver sido usado
+    // por último) — é a mesma lógica do clique em "Repetir Mesmos Ataques",
+    // só que sem depender do botão (que fica desabilitado até a estimativa
+    // de retorno das tropas, e nosso timer não precisa esperar isso).
+    // ------------------------------------------------------------
+    function acionarRodadaComLoop() {
+      if (window.demolidorActive) {
+        agendarProximoLoopAtaque(); // já tem uma rodada rodando, tenta de novo no próximo ciclo
+        return;
+      }
+      if (window.lastRoundType === 'demolidor' && window.lastDemolidorList && window.lastDemolidorList.length) {
+        window.demolidorQueue = window.lastDemolidorList.slice();
+        window.demolidorActive = true;
+        try { document.querySelectorAll('.amx-chip').forEach(function (c) { c.classList.remove('amx-done', 'amx-sending'); }); } catch (e) {}
+        window.runNextDemolidorRound();
+      } else {
+        window.executarEnvio();
+      }
+    }
+
+    function agendarProximoLoopAtaque() {
+      var cfgAtual = lerConfigLoop();
+      if (!cfgAtual.ativo) return;
+      var intervaloMs = Math.max(5000, (cfgAtual.min || 0) * 60000 + (cfgAtual.seg || 0) * 1000);
+      var alvo = Date.now() + intervaloMs;
+      function atualizarContagem() {
+        var st = document.getElementById('ork-loop-ataque-status');
+        if (!st) return;
+        var rest = Math.max(0, alvo - Date.now());
+        var m = Math.floor(rest / 60000), s = Math.floor((rest % 60000) / 1000);
+        st.textContent = '🔁 Próxima leva em ' + m + 'm ' + (s < 10 ? '0' : '') + s + 's';
+      }
+      atualizarContagem();
+      var intervaloVisual = setInterval(atualizarContagem, 1000);
+      window.__ORK_LoopAtaqueTimeoutId = setTimeout(function () {
+        clearInterval(intervaloVisual);
+        acionarRodadaComLoop();
+      }, intervaloMs);
+    }
+
+    // Encaixa nos dois pontos de "a rodada terminou de vez" que o script já tem:
+    // finishRound (rodada normal, sem callback do Demolidor) e runNextDemolidorRound
+    // (quando a fila do Demolidor esvazia). Não muda nada do comportamento original,
+    // só espia quando termina pra, se o loop estiver ligado, agendar a próxima.
+    if (!window.__ORK_LoopAtaqueGanchosInstalados) {
+      window.__ORK_LoopAtaqueGanchosInstalados = true;
+
+      var finishRoundOriginal = window.finishRound;
+      window.finishRound = function () {
+        var tinhaCallbackAntes = !!window.onRoundDoneCallback;
+        finishRoundOriginal();
+        if (!tinhaCallbackAntes) {
+          var cfgAgora = lerConfigLoop();
+          if (cfgAgora.ativo) { agendarProximoLoopAtaque(); }
+        }
+      };
+
+      var runNextDemolidorRoundOriginal = window.runNextDemolidorRound;
+      window.runNextDemolidorRound = function () {
+        runNextDemolidorRoundOriginal();
+        if (!window.demolidorActive) {
+          var cfgAgora = lerConfigLoop();
+          if (cfgAgora.ativo) { agendarProximoLoopAtaque(); }
+        }
+      };
+    }
   }
   function rodarAtaque() {
     rodarAtaqueOriginal();
