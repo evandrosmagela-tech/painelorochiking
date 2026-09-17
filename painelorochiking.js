@@ -152,7 +152,7 @@
     'iframe[src*="hcaptcha" i]', 'iframe[src*="recaptcha" i]',
     'iframe[title*="human" i]', 'iframe[title*="challenge" i]'
   ];
-  var TEXTOS_CAPTCHA = ['proteção contra bots', 'proteção de bot', 'sou humano', 'bot_check', 'bot check', 'captcha'];
+  var TEXTOS_CAPTCHA = ['sou humano', 'bot check'];
 
   function elementoVisivel(el) {
     if (!el) return false;
@@ -161,16 +161,40 @@
   }
 
   function captchaNaTela() {
+    // Prioridade 1: Verificar seletores específicos de captcha real
     for (var i = 0; i < SELETORES_CAPTCHA.length; i++) {
       try {
         var el = document.querySelector(SELETORES_CAPTCHA[i]);
-        if (el && elementoVisivel(el)) { return true; }
+        if (el && elementoVisivel(el)) { 
+          return true;  // Elemento de captcha visível = CAPTCHA REAL
+        }
       } catch (e) {}
     }
+    // Prioridade 2: Procurar por iframes de captcha (hcaptcha, recaptcha)
+    try {
+      var iframes = document.querySelectorAll('iframe');
+      for (var fi = 0; fi < iframes.length; fi++) {
+        var src = (iframes[fi].src || '').toLowerCase();
+        var title = (iframes[fi].title || '').toLowerCase();
+        if (src.indexOf('hcaptcha') !== -1 || src.indexOf('recaptcha') !== -1 ||
+            title.indexOf('challenge') !== -1 || title.indexOf('human') !== -1) {
+          return true;
+        }
+      }
+    } catch (e) {}
+    // Prioridade 3: Texto genérico (menos confiável, só se houver iframe)
     try {
       var texto = (document.body.innerText || '').toLowerCase();
       for (var j = 0; j < TEXTOS_CAPTCHA.length; j++) {
-        if (texto.indexOf(TEXTOS_CAPTCHA[j]) !== -1) { return true; }
+        if (texto.indexOf(TEXTOS_CAPTCHA[j]) !== -1) { 
+          // Dupla verificação: só retornar true se houver iframe também
+          var temIframe = false;
+          try {
+            var iframes2 = document.querySelectorAll('iframe[src*="hcaptcha"], iframe[src*="recaptcha"]');
+            temIframe = iframes2.length > 0;
+          } catch (e2) {}
+          if (temIframe) { return true; }
+        }
       }
     } catch (e) {}
     return false;
@@ -179,8 +203,19 @@
   function textoIndicaCaptcha(texto) {
     if (!texto) return false;
     var t = String(texto).toLowerCase();
-    for (var i = 0; i < TEXTOS_CAPTCHA.length; i++) {
-      if (t.indexOf(TEXTOS_CAPTCHA[i]) !== -1) { return true; }
+    // Procurar por padrões de captcha REAL, não só palavras-chave genéricas
+    // Padrões: "bot_check", "h-captcha", "g-recaptcha", iframe src contém captcha, etc
+    if (t.indexOf('bot_check') !== -1) { return true; }
+    if (t.indexOf('h-captcha') !== -1 || t.indexOf('hcaptcha') !== -1) { return true; }
+    if (t.indexOf('g-recaptcha') !== -1 || t.indexOf('recaptcha') !== -1) { return true; }
+    if (t.indexOf('iframe') !== -1 && (t.indexOf('challenge') !== -1 || t.indexOf('human') !== -1)) { return true; }
+    // Apenas "sou humano" ou "bot check" se TAMBÉM houver indicador de container captcha
+    var temContainer = (t.indexOf('captcha-container') !== -1 || t.indexOf('bot-protect') !== -1 || 
+                       t.indexOf('anti-bot') !== -1 || t.indexOf('_container') !== -1);
+    if (temContainer) {
+      for (var i = 0; i < TEXTOS_CAPTCHA.length; i++) {
+        if (t.indexOf(TEXTOS_CAPTCHA[i]) !== -1) { return true; }
+      }
     }
     return false;
   }
@@ -281,9 +316,15 @@
   }
 
   (function monitorCaptchaVisual() {
+    var ultimaDeteccao = false;
     setInterval(function () {
-      if (captchaNaTela()) { ativarModoCaptcha(); }
-      else { desativarModoCaptcha(); }
+      var temCaptcha = captchaNaTela();
+      // Só mudar de estado após 2 detecções confirmadas (evita falsos positivos)
+      if (temCaptcha !== ultimaDeteccao) {
+        ultimaDeteccao = temCaptcha;
+        if (temCaptcha) { ativarModoCaptcha(); }
+        else { desativarModoCaptcha(); }
+      }
     }, 1200);
   })();
 
@@ -303,9 +344,14 @@
           }
           return fetchOriginal.call(window, input, init).then(function (resposta) {
             try {
-              resposta.clone().text().then(function (texto) {
-                if (textoIndicaCaptcha(texto)) { ativarModoCaptcha(); }
-              }).catch(function () {});
+              // Só inspecionar respostas que parecem ser HTML (não .js, .css, .json, etc)
+              var contentType = (resposta.headers.get('content-type') || '').toLowerCase();
+              if (contentType.indexOf('text/html') !== -1 || 
+                  (contentType === '' && resposta.status < 400)) {
+                resposta.clone().text().then(function (texto) {
+                  if (textoIndicaCaptcha(texto)) { ativarModoCaptcha(); }
+                }).catch(function () {});
+              }
             } catch (e) {}
             return resposta;
           });
@@ -1969,7 +2015,6 @@
         } catch (e) {}
       }
     
-      // linha típica dessa tela tem um checkbox de seleção na primeira coluna
       var linhas = Array.prototype.slice.call(document.querySelectorAll('tr'))
         .filter(function (tr) { return tr.querySelector('input[type="checkbox"]') && tr.querySelectorAll('a').length; });
     
@@ -2010,17 +2055,100 @@
         return;
       }
     
-      var windowM = window.open('Incomings.html', 'Incomings', 'width=720, height=500, top=100, left=110, scrollbars=yes');
-      if (!windowM) {
+      var popup = window.open('about:blank', 'Operacoes', 'width=920,height=680,scrollbars=1');
+      if (!popup) {
         alert('OROCHIKING: o navegador bloqueou o popup. Permita popups para este site e clique em Ativar de novo.');
         return;
       }
-      windowM.document.write(
-        "<html><body><h1>Origem</h1><textarea cols='80' rows='10' disabled>" + origem.join(",") + "</textarea>" +
-        "<h1>Destino</h1><textarea cols='80' rows='10' disabled>" + destino.join(",") + "</textarea></body></html>"
-      );
+
+      popup.document.open('text/html', 'replace');
+      var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Coletor de Operação - OROCHIKING</title>';
+      html += '<style>';
+      html += '*{margin:0;padding:0;box-sizing:border-box}';
+      html += 'body{background:linear-gradient(165deg,#1a1a1a,#0a0a0a);font-family:"Segoe UI",Arial,sans-serif;color:#eee;height:100vh;overflow:hidden}';
+      html += '#hdr{background:linear-gradient(100deg,#FFB800,#FFDD55 50%,#FFB800);color:#141200;padding:14px 16px;text-align:center;font-weight:800;font-size:16px;letter-spacing:1.2px;box-shadow:0 2px 8px rgba(0,0,0,.4)}';
+      html += '#flex{display:flex;height:calc(100vh - 60px)}';
+      html += '#left{width:180px;background:#161616;border-right:1px solid #2c2c2c;overflow-y:auto;padding:8px}';
+      html += '.tbtn{width:100%;background:#1c1c1c;border:1px solid #333;border-radius:6px;padding:10px;margin-bottom:6px;color:#aaa;cursor:pointer;font-size:11px;font-weight:700;text-align:left;word-break:break-word;transition:.15s}';
+      html += '.tbtn:hover{border-color:#665400;background:#241f08;color:#fff}';
+      html += '.tbtn.x{background:linear-gradient(100deg,#FFB800,#FFDD55);color:#141200;border-color:#FFB800}';
+      html += '#right{flex:1;display:flex;flex-direction:column;padding:12px;background:#0f0f0f;overflow:hidden}';
+      html += '.tab{display:none;flex-direction:column;height:100%}';
+      html += '.tab.x{display:flex}';
+      html += '.ttl{font-size:13px;font-weight:800;color:#FFB800;margin-bottom:6px;text-transform:uppercase}';
+      html += '.ctr{font-size:10px;color:#999;margin-bottom:6px;padding:4px 6px;background:#161616;border-radius:4px;border:1px solid #2c2c2c;text-align:center}';
+      html += 'textarea{flex:1;background:#0a0a0a;border:1px solid #2c2c2c;border-radius:6px;color:#E9C25E;font-family:Consolas,monospace;font-size:11px;padding:8px;resize:none;overflow-y:auto;margin-bottom:8px}';
+      html += 'textarea:focus{outline:none;border-color:#FFB800;box-shadow:0 0 8px rgba(255,184,0,.3)}';
+      html += '.btnz{display:flex;gap:6px}';
+      html += 'button{flex:1;background:linear-gradient(100deg,#FFB800,#FFDD55);color:#141200;border:none;border-radius:6px;padding:6px;cursor:pointer;font-weight:800;font-size:11px;text-transform:uppercase}';
+      html += 'button:hover{filter:brightness(1.1)}';
+      html += '.btn2{background:#232323;color:#FFB800;border:1px solid #3a3a3a}';
+      html += '.btn2:hover{background:#2b2b2b}';
+      html += '</style></head><body>';
+      html += '<div id="hdr">🛡️ COLETOR DE OPERAÇÃO — OROCHIKING</div>';
+      html += '<div id="flex"><div id="left"></div><div id="right"></div></div>';
+      html += '<script>';
+      html += 'var tabs=[],content={};';
+      html += 'tabs.push({n:"🏠 Origem",i:"orig"});';
+      html += 'content["orig"]=' + JSON.stringify(origem.join(' ')) + ';';
+      html += 'tabs.push({n:"🎯 Destino",i:"dest"});';
+      html += 'content["dest"]=' + JSON.stringify(destino.join(' ')) + ';';
+      html += 'function mk(t){';
+      html += '  var b=document.createElement("button");';
+      html += '  b.className="tbtn"+(t===tabs[0]?" x":"");';
+      html += '  b.textContent=t.n;';
+      html += '  b.onclick=function(){sw(t.i)};';
+      html += '  document.getElementById("left").appendChild(b);';
+      html += '  var d=document.createElement("div");';
+      html += '  d.className="tab"+(t===tabs[0]?" x":"");';
+      html += '  d.id="tab"+t.i;';
+      html += '  var ttl=document.createElement("div");';
+      html += '  ttl.className="ttl";';
+      html += '  ttl.textContent=t.n;';
+      html += '  d.appendChild(ttl);';
+      html += '  var ctr=document.createElement("div");';
+      html += '  ctr.className="ctr";';
+      html += '  var cnt=content[t.i].split(/\s+/).filter(x=>/^\d+\|\d+$/.test(x)).length;';
+      html += '  ctr.textContent=cnt+" coordenadas";';
+      html += '  d.appendChild(ctr);';
+      html += '  var ta=document.createElement("textarea");';
+      html += '  ta.id="ta"+t.i;';
+      html += '  ta.readOnly=true;';
+      html += '  ta.value=content[t.i];';
+      html += '  d.appendChild(ta);';
+      html += '  var bs=document.createElement("div");';
+      html += '  bs.className="btnz";';
+      html += '  var bc=document.createElement("button");';
+      html += '  bc.className="btn2";';
+      html += '  bc.textContent="📋 Copiar";';
+      html += '  bc.onclick=function(){cp("ta"+t.i)};';
+      html += '  var bs2=document.createElement("button");';
+      html += '  bs2.className="btn2";';
+      html += '  bs2.textContent="✓ Selecionar";';
+      html += '  bs2.onclick=function(){document.getElementById("ta"+t.i).select()};';
+      html += '  bs.appendChild(bc);';
+      html += '  bs.appendChild(bs2);';
+      html += '  d.appendChild(bs);';
+      html += '  document.getElementById("right").appendChild(d);';
+      html += '}';
+      html += 'function sw(i){';
+      html += '  document.querySelectorAll(".tbtn").forEach(x=>x.classList.remove("x"));';
+      html += '  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("x"));';
+      html += '  event.target.classList.add("x");';
+      html += '  document.getElementById("tab"+i).classList.add("x");';
+      html += '}';
+      html += 'function cp(i){';
+      html += '  var el=document.getElementById(i);';
+      html += '  el.select();';
+      html += '  el.setSelectionRange(0,999999);';
+      html += '  try{document.execCommand("copy");alert("✅ Coordenadas copiadas!")}catch(e){alert("❌ Erro ao copiar")}';
+      html += '}';
+      html += 'tabs.forEach(mk);';
+      html += 'document.querySelector("textarea").focus();';
+      html += '</script></body></html>';
+      popup.document.write(html);
+      popup.document.close();
     })();
-    
   }
 
   function checaBarbaras() {
@@ -2034,7 +2162,125 @@
     return document.URL.indexOf('screen=info_player') !== -1;
   }
   function rodarPerfil() {
-    if (game_data.player.premium == false) { alert("Para utilizar esse script é necessário uma Conta Premium."); return; } if ( typeof bb === 'undefined') var bb = false; if (document.URL.indexOf('screen=info_player') == -1) { alert('Você deve executar o script no perfil de algum jogador!'); } else { var tds = document.getElementsByTagName("TD"); var K = new Array(); for (var idx = 0; idx < 100; idx++) K[idx] = new Array(); var C = new Array(); for (var idx = 0; idx < tds.length; idx++) { var xy = tds[idx].innerHTML; if (/^\d+\|\d+$/.test(xy)) { C.push(xy); var xys = xy.split('|'); K[Math.floor(parseInt(xys[0]) / 100) + Math.floor(parseInt(xys[1]) / 100) * 10].push(xy); } } if (bb == true) { C = "Esta aldeia não existe Esta aldeia não existe"; } if (bb == false) { C = C.join(' '); } var prefix = '<textarea cols=80 rows=10>'; var postfix = '<\/textarea>'; var S = '<html>' + '<head>' + '<title>Coletor de Coordenadas</title>' + '<meta http-equiv=\"content-type\" content=\"text/html; charset=UTF-8\" />' + '</head>' + '<body>' + '<b>Coletor de Coordenadas</b><hr>Todas as Aldeias do Jogador:<br>' + prefix + C + postfix; for (var idx = 0; idx < 100; idx++) if (K[idx].length > 0) { if (bb == true) { var Ks = "Esta aldeia não existe Esta aldeia não existe"; } if (bb == false) { var Ks = K[idx].join(' '); } S += '<br><br> Aldeias do Continente ' + idx + ' <br>' + prefix + Ks + postfix; } S += '</body></html>'; var popup = window.open('about:blank', 'twcc', 'width=720,height=480,scrollbars=1'); if (!popup) { alert('OROCHIKING: o navegador bloqueou o popup. Permita popups para este site e clique em Ativar de novo.'); } else { popup.document.open('text/html', 'replace'); popup.document.write(S); popup.document.close(); } };void(0);
+    if (game_data.player.premium == false) { alert("Para utilizar esse script é necessário uma Conta Premium."); return; }
+if (typeof bb === 'undefined') var bb = false;
+if (document.URL.indexOf('screen=info_player') == -1) {
+  alert('Você deve executar o script no perfil de algum jogador!');
+} else {
+  var tds = document.getElementsByTagName("TD");
+  var K = new Array();
+  for (var idx = 0; idx < 100; idx++) K[idx] = new Array();
+  var C = new Array();
+  for (var idx = 0; idx < tds.length; idx++) {
+    var xy = tds[idx].innerHTML;
+    if (/^\d+\|\d+$/.test(xy)) {
+      C.push(xy);
+      var xys = xy.split('|');
+      K[Math.floor(parseInt(xys[0]) / 100) + Math.floor(parseInt(xys[1]) / 100) * 10].push(xy);
+    }
+  }
+  
+  if (bb == true) { C = "Esta aldeia não existe"; }
+  if (bb == false) { C = C.join(' '); }
+  
+  var popup = window.open('about:blank', 'twcc', 'width=920,height=680,scrollbars=1');
+  if (!popup) {
+    alert('OROCHIKING: o navegador bloqueou o popup. Permita popups para este site e clique em Ativar de novo.');
+  } else {
+    popup.document.open('text/html', 'replace');
+    var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Coletor de Coordenadas - OROCHIKING</title>';
+    html += '<style>';
+    html += '*{margin:0;padding:0;box-sizing:border-box}';
+    html += 'body{background:linear-gradient(165deg,#1a1a1a,#0a0a0a);font-family:"Segoe UI",Arial,sans-serif;color:#eee;height:100vh;overflow:hidden}';
+    html += '#hdr{background:linear-gradient(100deg,#FFB800,#FFDD55 50%,#FFB800);color:#141200;padding:14px 16px;text-align:center;font-weight:800;font-size:16px;letter-spacing:1.2px;box-shadow:0 2px 8px rgba(0,0,0,.4)}';
+    html += '#flex{display:flex;height:calc(100vh - 60px)}';
+    html += '#left{width:180px;background:#161616;border-right:1px solid #2c2c2c;overflow-y:auto;padding:8px}';
+    html += '.tbtn{width:100%;background:#1c1c1c;border:1px solid #333;border-radius:6px;padding:10px;margin-bottom:6px;color:#aaa;cursor:pointer;font-size:11px;font-weight:700;text-align:left;word-break:break-word;transition:.15s}';
+    html += '.tbtn:hover{border-color:#665400;background:#241f08;color:#fff}';
+    html += '.tbtn.x{background:linear-gradient(100deg,#FFB800,#FFDD55);color:#141200;border-color:#FFB800}';
+    html += '#right{flex:1;display:flex;flex-direction:column;padding:12px;background:#0f0f0f;overflow:hidden}';
+    html += '.tab{display:none;flex-direction:column;height:100%}';
+    html += '.tab.x{display:flex}';
+    html += '.ttl{font-size:13px;font-weight:800;color:#FFB800;margin-bottom:6px;text-transform:uppercase}';
+    html += '.ctr{font-size:10px;color:#999;margin-bottom:6px;padding:4px 6px;background:#161616;border-radius:4px;border:1px solid #2c2c2c;text-align:center}';
+    html += 'textarea{flex:1;background:#0a0a0a;border:1px solid #2c2c2c;border-radius:6px;color:#E9C25E;font-family:Consolas,monospace;font-size:11px;padding:8px;resize:none;overflow-y:auto;margin-bottom:8px}';
+    html += 'textarea:focus{outline:none;border-color:#FFB800;box-shadow:0 0 8px rgba(255,184,0,.3)}';
+    html += '.btnz{display:flex;gap:6px}';
+    html += 'button{flex:1;background:linear-gradient(100deg,#FFB800,#FFDD55);color:#141200;border:none;border-radius:6px;padding:6px;cursor:pointer;font-weight:800;font-size:11px;text-transform:uppercase}';
+    html += 'button:hover{filter:brightness(1.1)}';
+    html += '.btn2{background:#232323;color:#FFB800;border:1px solid #3a3a3a}';
+    html += '.btn2:hover{background:#2b2b2b}';
+    html += '</style></head><body>';
+    html += '<div id="hdr">🗺️ COLETOR DE COORDENADAS — OROCHIKING</div>';
+    html += '<div id="flex"><div id="left"></div><div id="right"></div></div>';
+    html += '<script>';
+    html += 'var dt=[],cn={};';
+    html += 'dt.push({n:"📍 Todas",i:"t"});';
+    html += 'cn["t"]=' + JSON.stringify(C) + ';';
+    for(var i = 0; i < 100; i++) {
+      if (K[i].length > 0) {
+        var kk = (bb == true) ? "Esta aldeia não existe" : K[i].join(' ');
+        html += 'dt.push({n:"🏰 K' + String.fromCharCode(65 + Math.floor(i/10)) + (i%10) + '",i:"c' + i + '"});';
+        html += 'cn["c' + i + '"]=' + JSON.stringify(kk) + ';';
+      }
+    }
+    html += 'function mk(ab){';
+    html += '  var b=document.createElement("button");';
+    html += '  b.className="tbtn";';
+    html += '  b.textContent=ab.n;';
+    html += '  b.onclick=function(){abt(ab.i)};';
+    html += '  document.getElementById("left").appendChild(b);';
+    html += '  var d=document.createElement("div");';
+    html += '  d.className="tab"+(ab===dt[0]?" x":"");';
+    html += '  d.id="ab"+ab.i;';
+    html += '  var t=document.createElement("div");';
+    html += '  t.className="ttl";';
+    html += '  t.textContent=ab.n;';
+    html += '  d.appendChild(t);';
+    html += '  var c=document.createElement("div");';
+    html += '  c.className="ctr";';
+    html += '  var nc=cn[ab.i].split(/\s+/).filter(x=>/^\d+\|\d+$/.test(x)).length;';
+    html += '  c.textContent=nc+" coords";';
+    html += '  d.appendChild(c);';
+    html += '  var ta=document.createElement("textarea");';
+    html += '  ta.id="ta"+ab.i;';
+    html += '  ta.readOnly=true;';
+    html += '  ta.value=cn[ab.i];';
+    html += '  d.appendChild(ta);';
+    html += '  var bs=document.createElement("div");';
+    html += '  bs.className="btnz";';
+    html += '  var bc=document.createElement("button");';
+    html += '  bc.className="btn2";';
+    html += '  bc.textContent="📋 Copiar";';
+    html += '  bc.onclick=function(){cp("ta"+ab.i)};';
+    html += '  var bs2=document.createElement("button");';
+    html += '  bs2.className="btn2";';
+    html += '  bs2.textContent="✓ Selecionar";';
+    html += '  bs2.onclick=function(){document.getElementById("ta"+ab.i).select()};';
+    html += '  bs.appendChild(bc);';
+    html += '  bs.appendChild(bs2);';
+    html += '  d.appendChild(bs);';
+    html += '  document.getElementById("right").appendChild(d);';
+    html += '}';
+    html += 'function abt(i){';
+    html += '  document.querySelectorAll(".tbtn").forEach(x=>x.classList.remove("x"));';
+    html += '  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("x"));';
+    html += '  event.target.classList.add("x");';
+    html += '  document.getElementById("ab"+i).classList.add("x");';
+    html += '}';
+    html += 'function cp(i){';
+    html += '  var el=document.getElementById(i);';
+    html += '  el.select();';
+    html += '  el.setSelectionRange(0,999999);';
+    html += '  try{document.execCommand("copy");alert("✅ Coordenadas copiadas!")}catch(e){alert("❌ Erro ao copiar")}';
+    html += '}';
+    html += 'dt.forEach(mk);';
+    html += 'document.querySelector("textarea").focus();';
+    html += '</script></body></html>';
+    popup.document.write(html);
+    popup.document.close();
+  }
+};void(0);
   }
 
   function checaOcultar() {
