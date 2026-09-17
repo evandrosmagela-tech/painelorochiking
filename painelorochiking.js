@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OROCHIKING - Painel Unificado
 // @namespace    orochiking.painel
-// @version      12.0
+// @version      13.0
 // @description  Painel único (preto/dourado) OROCHIKING. Abre no Assistente de Saque, navega e ativa cada script no lugar certo (com confirmação de 1 clique pra não cair no bloqueio de popup), com monitor de captcha (alerta visual + sonoro contínuo).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -1738,7 +1738,7 @@
   }
   function adicionarLoopAtaque() {
     var botaoRepetir = document.getElementById('amxRepeatBtn');
-    if (!botaoRepetir || document.getElementById('ork-loop-ataque')) return;
+    if (!botaoRepetir) return;
 
     var CHAVE_CFG = 'ork_loop_ataque_config';
     function lerConfigLoop() {
@@ -1751,50 +1751,55 @@
       try { localStorage.setItem(CHAVE_CFG, JSON.stringify(cfg)); } catch (e) {}
     }
 
-    var caixa = document.createElement('div');
-    caixa.id = 'ork-loop-ataque';
-    caixa.style.cssText = 'margin-top:12px;padding:10px 12px;background:rgba(255,255,255,.03);' +
-      'border:1px solid rgba(255,255,255,.08);border-radius:10px;font-family:Segoe UI,Arial,sans-serif';
-    caixa.innerHTML =
-      '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11.5px;color:#d8d8d8;user-select:none">' +
-        '<input type="checkbox" id="ork-loop-ataque-check" style="width:auto"> ' +
-        '🔁 Repetir esta lista sozinho, de tempos em tempos' +
-      '</label>' +
-      '<div style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:11px;color:#bbb">' +
-        'Repetir a cada ' +
-        '<input type="number" id="ork-loop-ataque-min" min="0" style="width:46px;background:#111;border:1px solid #444;color:#eee;border-radius:5px;padding:3px 5px"> min ' +
-        '<input type="number" id="ork-loop-ataque-seg" min="0" max="59" style="width:46px;background:#111;border:1px solid #444;color:#eee;border-radius:5px;padding:3px 5px"> s' +
-      '</div>' +
-      '<div id="ork-loop-ataque-status" style="font-size:10.5px;color:#f0b90b;margin-top:6px;min-height:13px"></div>';
-    botaoRepetir.parentNode.insertBefore(caixa, botaoRepetir.nextSibling);
+    // A caixinha visual só precisa ser criada uma vez; os ganchos (mais abaixo)
+    // precisam ser reinstalados TODA vez que essa função roda, mesmo que a caixinha
+    // já exista — por isso essa parte fica num "if" separado, não um return antecipado.
+    if (!document.getElementById('ork-loop-ataque')) {
+      var caixa = document.createElement('div');
+      caixa.id = 'ork-loop-ataque';
+      caixa.style.cssText = 'margin-top:12px;padding:10px 12px;background:rgba(255,255,255,.03);' +
+        'border:1px solid rgba(255,255,255,.08);border-radius:10px;font-family:Segoe UI,Arial,sans-serif';
+      caixa.innerHTML =
+        '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11.5px;color:#d8d8d8;user-select:none">' +
+          '<input type="checkbox" id="ork-loop-ataque-check" style="width:auto"> ' +
+          '🔁 Repetir esta lista sozinho, de tempos em tempos' +
+        '</label>' +
+        '<div style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:11px;color:#bbb">' +
+          'Repetir a cada ' +
+          '<input type="number" id="ork-loop-ataque-min" min="0" style="width:46px;background:#111;border:1px solid #444;color:#eee;border-radius:5px;padding:3px 5px"> min ' +
+          '<input type="number" id="ork-loop-ataque-seg" min="0" max="59" style="width:46px;background:#111;border:1px solid #444;color:#eee;border-radius:5px;padding:3px 5px"> s' +
+        '</div>' +
+        '<div id="ork-loop-ataque-status" style="font-size:10.5px;color:#f0b90b;margin-top:6px;min-height:13px"></div>';
+      botaoRepetir.parentNode.insertBefore(caixa, botaoRepetir.nextSibling);
 
-    var check = document.getElementById('ork-loop-ataque-check');
-    var inputMin = document.getElementById('ork-loop-ataque-min');
-    var inputSeg = document.getElementById('ork-loop-ataque-seg');
-    var status = document.getElementById('ork-loop-ataque-status');
+      var check = document.getElementById('ork-loop-ataque-check');
+      var inputMin = document.getElementById('ork-loop-ataque-min');
+      var inputSeg = document.getElementById('ork-loop-ataque-seg');
+      var status = document.getElementById('ork-loop-ataque-status');
 
-    var cfg = lerConfigLoop();
-    check.checked = cfg.ativo;
-    inputMin.value = cfg.min;
-    inputSeg.value = cfg.seg;
+      var cfg = lerConfigLoop();
+      check.checked = cfg.ativo;
+      inputMin.value = cfg.min;
+      inputSeg.value = cfg.seg;
 
-    function salvarConfigAtual() {
-      gravarConfigLoop({
-        ativo: check.checked,
-        min: parseInt(inputMin.value, 10) || 0,
-        seg: parseInt(inputSeg.value, 10) || 0
+      var salvarConfigAtual = function () {
+        gravarConfigLoop({
+          ativo: check.checked,
+          min: parseInt(inputMin.value, 10) || 0,
+          seg: parseInt(inputSeg.value, 10) || 0
+        });
+      };
+      check.addEventListener('change', function () {
+        salvarConfigAtual();
+        if (!check.checked && window.__ORK_LoopAtaqueTimeoutId) {
+          clearTimeout(window.__ORK_LoopAtaqueTimeoutId);
+          window.__ORK_LoopAtaqueTimeoutId = null;
+          status.textContent = '';
+        }
       });
+      inputMin.addEventListener('change', salvarConfigAtual);
+      inputSeg.addEventListener('change', salvarConfigAtual);
     }
-    check.addEventListener('change', function () {
-      salvarConfigAtual();
-      if (!check.checked && window.__ORK_LoopAtaqueTimeoutId) {
-        clearTimeout(window.__ORK_LoopAtaqueTimeoutId);
-        window.__ORK_LoopAtaqueTimeoutId = null;
-        status.textContent = '';
-      }
-    });
-    inputMin.addEventListener('change', salvarConfigAtual);
-    inputSeg.addEventListener('change', salvarConfigAtual);
 
     // ------------------------------------------------------------
     // Reaciona a mesma leva (normal ou Demolidor, o que tiver sido usado
@@ -1824,14 +1829,10 @@
 
       // Atraso extra aleatório (10 a 15s) em cima do intervalo configurado, pra não
       // disparar sempre no mesmo timing exato — evita um padrão robótico reconhecível.
+      // Dispara sempre nesse intervalo, tenha ou não tropa disponível na origem — o
+      // próprio jogo já manda só o que tiver de cada tropa selecionada no modelo.
       var jitterMs = 10000 + Math.random() * 5000;
       var alvo = Date.now() + intervaloBaseMs + jitterMs;
-
-      // Não dispara antes das tropas terem tido tempo de voltar (estimativa do próprio
-      // script) — mandar sem tropa disponível não faz efeito nenhum, só é desperdício.
-      if (window.roundReturnAtMs && window.roundReturnAtMs + 1000 > alvo) {
-        alvo = window.roundReturnAtMs + 1000 + jitterMs;
-      }
 
       var intervaloMs = alvo - Date.now();
 
@@ -1861,11 +1862,15 @@
     // alert trava a página inteira (inclusive nosso próprio timer) até alguém clicar
     // OK. Isso destrava tudo até você chegar no computador e clicar. Com o loop
     // ligado, reproduzimos a mesma lógica sem esse alerta bloqueante.
-    if (!window.__ORK_LoopAtaqueGanchosInstalados) {
-      window.__ORK_LoopAtaqueGanchosInstalados = true;
-
-      var finishRoundOriginal = window.finishRound;
-      window.finishRound = function () {
+    //
+    // Reinstala o gancho TODA vez que essa função roda (não só na primeira), porque
+    // se o Ataque Mass for reaberto/reativado ele redefine finishRound/runNextDemolidorRound
+    // do zero — se a gente só instalasse uma vez, a segunda ativação ficaria sem gancho
+    // e o alerta bloqueante voltaria a aparecer.
+    (function instalarGanchosLoop() {
+      var finishRoundAtual = window.finishRound;
+      var finishRoundOriginal = (finishRoundAtual && finishRoundAtual.__orkOriginal) ? finishRoundAtual.__orkOriginal : finishRoundAtual;
+      var novoFinishRound = function () {
         var cb = window.onRoundDoneCallback;
         window.onRoundDoneCallback = null;
         var cfgAgora = lerConfigLoop();
@@ -1880,16 +1885,21 @@
           finishRoundOriginal();
         }
       };
+      novoFinishRound.__orkOriginal = finishRoundOriginal;
+      window.finishRound = novoFinishRound;
 
-      var runNextDemolidorRoundOriginal = window.runNextDemolidorRound;
-      window.runNextDemolidorRound = function () {
+      var runNextDemolidorRoundAtual = window.runNextDemolidorRound;
+      var runNextDemolidorRoundOriginal = (runNextDemolidorRoundAtual && runNextDemolidorRoundAtual.__orkOriginal) ? runNextDemolidorRoundAtual.__orkOriginal : runNextDemolidorRoundAtual;
+      var novoRunNextDemolidorRound = function () {
         runNextDemolidorRoundOriginal();
         if (!window.demolidorActive) {
           var cfgAgora = lerConfigLoop();
           if (cfgAgora.ativo) { agendarProximoLoopAtaque(); }
         }
       };
-    }
+      novoRunNextDemolidorRound.__orkOriginal = runNextDemolidorRoundOriginal;
+      window.runNextDemolidorRound = novoRunNextDemolidorRound;
+    })();
   }
   function rodarAtaque() {
     rodarAtaqueOriginal();
