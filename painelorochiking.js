@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OROCHIKING - Painel Unificado
 // @namespace    orochiking.painel
-// @version      11.0
+// @version      12.0
 // @description  Painel único (preto/dourado) OROCHIKING. Abre no Assistente de Saque, navega e ativa cada script no lugar certo (com confirmação de 1 clique pra não cair no bloqueio de popup), com monitor de captcha (alerta visual + sonoro contínuo).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -1820,8 +1820,21 @@
     function agendarProximoLoopAtaque() {
       var cfgAtual = lerConfigLoop();
       if (!cfgAtual.ativo) return;
-      var intervaloMs = Math.max(5000, (cfgAtual.min || 0) * 60000 + (cfgAtual.seg || 0) * 1000);
-      var alvo = Date.now() + intervaloMs;
+      var intervaloBaseMs = Math.max(5000, (cfgAtual.min || 0) * 60000 + (cfgAtual.seg || 0) * 1000);
+
+      // Atraso extra aleatório (10 a 15s) em cima do intervalo configurado, pra não
+      // disparar sempre no mesmo timing exato — evita um padrão robótico reconhecível.
+      var jitterMs = 10000 + Math.random() * 5000;
+      var alvo = Date.now() + intervaloBaseMs + jitterMs;
+
+      // Não dispara antes das tropas terem tido tempo de voltar (estimativa do próprio
+      // script) — mandar sem tropa disponível não faz efeito nenhum, só é desperdício.
+      if (window.roundReturnAtMs && window.roundReturnAtMs + 1000 > alvo) {
+        alvo = window.roundReturnAtMs + 1000 + jitterMs;
+      }
+
+      var intervaloMs = alvo - Date.now();
+
       function atualizarContagem() {
         var st = document.getElementById('ork-loop-ataque-status');
         if (!st) return;
@@ -1830,27 +1843,41 @@
         st.textContent = '🔁 Próxima leva em ' + m + 'm ' + (s < 10 ? '0' : '') + s + 's';
       }
       atualizarContagem();
-      var intervaloVisual = setInterval(atualizarContagem, 1000);
+      if (window.__ORK_LoopAtaqueIntervaloVisual) { clearInterval(window.__ORK_LoopAtaqueIntervaloVisual); }
+      window.__ORK_LoopAtaqueIntervaloVisual = setInterval(atualizarContagem, 1000);
+      if (window.__ORK_LoopAtaqueTimeoutId) { clearTimeout(window.__ORK_LoopAtaqueTimeoutId); }
       window.__ORK_LoopAtaqueTimeoutId = setTimeout(function () {
-        clearInterval(intervaloVisual);
+        clearInterval(window.__ORK_LoopAtaqueIntervaloVisual);
         acionarRodadaComLoop();
       }, intervaloMs);
     }
 
     // Encaixa nos dois pontos de "a rodada terminou de vez" que o script já tem:
     // finishRound (rodada normal, sem callback do Demolidor) e runNextDemolidorRound
-    // (quando a fila do Demolidor esvazia). Não muda nada do comportamento original,
-    // só espia quando termina pra, se o loop estiver ligado, agendar a próxima.
+    // (quando a fila do Demolidor esvazia).
+    //
+    // IMPORTANTE: com o loop ligado, a gente NÃO chama o finishRound original —
+    // ele termina com um alert() nativo ("Todos os comandos foram enviados!"), e um
+    // alert trava a página inteira (inclusive nosso próprio timer) até alguém clicar
+    // OK. Isso destrava tudo até você chegar no computador e clicar. Com o loop
+    // ligado, reproduzimos a mesma lógica sem esse alerta bloqueante.
     if (!window.__ORK_LoopAtaqueGanchosInstalados) {
       window.__ORK_LoopAtaqueGanchosInstalados = true;
 
       var finishRoundOriginal = window.finishRound;
       window.finishRound = function () {
-        var tinhaCallbackAntes = !!window.onRoundDoneCallback;
-        finishRoundOriginal();
-        if (!tinhaCallbackAntes) {
-          var cfgAgora = lerConfigLoop();
-          if (cfgAgora.ativo) { agendarProximoLoopAtaque(); }
+        var cb = window.onRoundDoneCallback;
+        window.onRoundDoneCallback = null;
+        var cfgAgora = lerConfigLoop();
+        if (cb) {
+          cb();
+        } else if (cfgAgora.ativo) {
+          var st = document.getElementById('ork-loop-ataque-status');
+          if (st) st.textContent = '✅ Leva enviada — agendando a próxima...';
+          console.log('[OROCHIKING] Ataque: leva enviada (loop ativo, sem alerta bloqueante).');
+          agendarProximoLoopAtaque();
+        } else {
+          finishRoundOriginal();
         }
       };
 
@@ -2479,10 +2506,13 @@
   }
   function agendarProximoCicloCunhar(intervaloMs) {
     if (cunharTimeoutId) clearTimeout(cunharTimeoutId);
+    // Atraso extra aleatório (10 a 15s) em cima do intervalo configurado, pra não
+    // recarregar sempre no mesmo timing exato — evita um padrão robótico reconhecível.
+    var jitterMs = 10000 + Math.random() * 5000;
     cunharTimeoutId = setTimeout(function () {
       var cfgAtual = lerConfigCunhar();
       if (cfgAtual.ativo) { window.location.reload(); }
-    }, intervaloMs);
+    }, intervaloMs + jitterMs);
   }
   function mostrarStatusCunhar(cfg) {
     if (document.getElementById('ork-cunhar-status')) return;
