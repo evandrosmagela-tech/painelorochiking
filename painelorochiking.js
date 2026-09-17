@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OROCHIKING - Painel Unificado
 // @namespace    orochiking.painel
-// @version      13.0
+// @version      14.0
 // @description  Painel único (preto/dourado) OROCHIKING. Abre no Assistente de Saque, navega e ativa cada script no lugar certo (com confirmação de 1 clique pra não cair no bloqueio de popup), com monitor de captcha (alerta visual + sonoro contínuo).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -912,6 +912,14 @@
                       }
                       aldeia.data = tropas;
                       i++;
+                    } else if (data.error == _("9a07c3a91c3f2b7a6a8bc675d1bcb913")) {
+                      // Mesmo limite de "5 no mesmo segundo", só que já nessa primeira consulta
+                      // de tropas — comum quando muitas aldeias são consultadas quase juntas.
+                      // Não é erro definitivo: recoloca pra tentar de novo na próxima passada.
+                      console.log("First Request: " + data.error + " — reagendando " + aldeia.coord);
+                      removeVillage(aldeia.id);
+                      aldeiasAux.push(aldeia);
+                      aldeiasLength--;
                     } else {
                       removeVillage(aldeia.id);
                       console.log("First Request: " + data.error);
@@ -1187,6 +1195,15 @@
                       i++;
                       confirmedForSend++;
                       scheduleSend(aldeia, syncOn, targetTs);
+                    } else if (data.error == _("9a07c3a91c3f2b7a6a8bc675d1bcb913")) {
+                      // Mesmo limite de "5 no mesmo segundo" do Third Request, só que aqui na
+                      // confirmação — muito comum quando várias aldeias confirmam quase juntas.
+                      // Não é erro definitivo: tira dessa passada e recoloca pra tentar de novo
+                      // na próxima passada, em vez de descartar a aldeia de vez.
+                      console.log("Second Request: " + data.error + " — reagendando " + aldeia.coord);
+                      removeVillage(aldeia.id);
+                      aldeiasAux.push(aldeia);
+                      aldeiasLength--;
                     } else {
                       console.log("Second Request: " + data.error + " coord: " + aldeia.coord);
                       removeVillage(aldeia.id);
