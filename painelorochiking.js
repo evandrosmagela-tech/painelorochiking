@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OROCHIKING - Painel Unificado
 // @namespace    orochiking.painel
-// @version      16.0
+// @version      17.0
 // @description  Painel único (preto/dourado) OROCHIKING. Abre no Assistente de Saque, navega e ativa cada script no lugar certo (com confirmação de 1 clique pra não cair no bloqueio de popup), com monitor de captcha (alerta visual + sonoro contínuo).
 // @match        https://*.tribalwars.com.br/game.php*
 // @match        https://*.tribalwars.net/game.php*
@@ -146,29 +146,64 @@
      Detecta o desafio anti-bot, toca um alarme, mostra um aviso grande
      e tenta parar o Farm Hard imediatamente. Some sozinho quando resolvida.
   ============================================================ */
-  var SELETORES_CAPTCHA = [
-    '#bot_check', '.bot-protect-row', '#bot_check_wrapper', '.captcha',
-    '[id*="captcha" i]', '[class*="captcha" i]',
-    'iframe[src*="hcaptcha" i]', 'iframe[src*="recaptcha" i]',
-    'iframe[title*="human" i]', 'iframe[title*="challenge" i]'
+  // Só o container real do desafio e os iframes de verdade. Termos genéricos
+  // como "captcha" no id/classe foram removidos: o próprio jogo carrega estruturas
+  // de proteção anti-bot vazias/ocultas em páginas normais, e isso disparava
+  // alarme sem nenhum captcha na tela.
+  // Sinais DEFINITIVOS: um iframe de desafio real só existe quando há captcha.
+  // Não exigem checagem de tamanho — a presença já basta.
+  var SELETORES_CAPTCHA_FORTES = [
+    'iframe[src*="hcaptcha" i]', 'iframe[src*="recaptcha" i]', '.captcha iframe', '.captcha canvas'
   ];
-  var TEXTOS_CAPTCHA = ['proteção contra bots', 'proteção de bot', 'sou humano', 'bot_check', 'bot check', 'captcha'];
+  // Sinais FRACOS: containers que o jogo mantém vazios em páginas normais.
+  // Só contam se estiverem ocupando espaço de verdade na tela.
+  var SELETORES_CAPTCHA = [
+    '#bot_check', '#bot_check_wrapper', '.bot-protect-row'
+  ];
+  // Textos que só existem quando o desafio está REALMENTE visível pro jogador.
+  var TEXTOS_CAPTCHA = [
+    'proteção contra bots', 'proteção de bot', 'sou humano',
+    'bot protection', 'i am human', 'verificação de bot'
+  ];
+
+  // Visível de verdade: além de display/visibility, precisa ocupar espaço na tela.
+  // Um container vazio de 0x0 (que o jogo mantém em páginas normais) não conta.
+  function estaEscondido(el) {
+    var estilo = window.getComputedStyle ? window.getComputedStyle(el) : null;
+    return !!(estilo && (estilo.display === 'none' || estilo.visibility === 'hidden'));
+  }
 
   function elementoVisivel(el) {
     if (!el) return false;
-    var estilo = window.getComputedStyle ? window.getComputedStyle(el) : null;
-    return !(estilo && (estilo.display === 'none' || estilo.visibility === 'hidden'));
+    if (estaEscondido(el)) return false;
+    var largura = el.offsetWidth || 0, altura = el.offsetHeight || 0;
+    if (!largura && !altura && el.getBoundingClientRect) {
+      var r = el.getBoundingClientRect();
+      largura = r.width; altura = r.height;
+    }
+    // container declarado com tamanho no style conta mesmo sem layout calculado
+    if (!largura && !altura && el.getAttribute && /(width|height)s*:s*[1-9]/.test(el.getAttribute('style') || '')) return true;
+    return largura >= 40 && altura >= 40;
   }
 
   function captchaNaTela() {
+    // 1) sinais definitivos (iframe de desafio): basta não estar escondido
+    for (var f = 0; f < SELETORES_CAPTCHA_FORTES.length; f++) {
+      try {
+        var forte = document.querySelector(SELETORES_CAPTCHA_FORTES[f]);
+        if (forte && !estaEscondido(forte)) { return true; }
+      } catch (e) {}
+    }
+    // 2) containers genéricos: só valem se ocuparem espaço real
     for (var i = 0; i < SELETORES_CAPTCHA.length; i++) {
       try {
         var el = document.querySelector(SELETORES_CAPTCHA[i]);
         if (el && elementoVisivel(el)) { return true; }
       } catch (e) {}
     }
+    // 3) texto visível do desafio
     try {
-      var texto = (document.body.innerText || '').toLowerCase();
+      var texto = ((document.body.innerText || document.body.textContent) || '').toLowerCase();
       for (var j = 0; j < TEXTOS_CAPTCHA.length; j++) {
         if (texto.indexOf(TEXTOS_CAPTCHA[j]) !== -1) { return true; }
       }
@@ -176,13 +211,19 @@
     return false;
   }
 
+  // Marcadores fortes numa RESPOSTA de rede. Mesmo assim, nunca disparam o alarme
+  // sozinhos: servem só pra pedir uma reconferência antecipada no DOM (ver abaixo),
+  // porque o HTML normal do jogo menciona bot_check em scripts internos sem ter
+  // captcha nenhum na tela.
   function textoIndicaCaptcha(texto) {
     if (!texto) return false;
     var t = String(texto).toLowerCase();
-    for (var i = 0; i < TEXTOS_CAPTCHA.length; i++) {
-      if (t.indexOf(TEXTOS_CAPTCHA[i]) !== -1) { return true; }
-    }
-    return false;
+    return (
+      t.indexOf('bot_protection') !== -1 ||
+      t.indexOf('"captcha_required"') !== -1 ||
+      t.indexOf('proteção contra bots') !== -1 ||
+      t.indexOf('bot protection') !== -1
+    );
   }
 
   var alarmeAtivo = false;
@@ -262,6 +303,19 @@
      visual (DOM, a cada 1,2s) quanto pela inspeção das respostas
      de rede (instantâneo, no mesmo request que revelou o captcha).
   ============================================================ */
+  // Um sinal na rede NUNCA liga o alarme sozinho — ele só antecipa a conferência
+  // no DOM. Se o desafio realmente aparecer na tela, o alarme toca; se não
+  // aparecer (caso comum: menção a bot_check dentro do JS normal da página),
+  // nada acontece. Isso elimina o alarme tocando sem captcha nenhum na tela.
+  function conferirCaptchaNoDom() {
+    var tentativas = 0;
+    (function tentar() {
+      tentativas++;
+      if (captchaNaTela()) { ativarModoCaptcha(); return; }
+      if (tentativas < 6) { setTimeout(tentar, 400); }
+    })();
+  }
+
   function ativarModoCaptcha() {
     window.__ORK_CAPTCHA_BLOQUEADO__ = true;
     if (alarmeAtivo) return;
@@ -304,7 +358,7 @@
           return fetchOriginal.call(window, input, init).then(function (resposta) {
             try {
               resposta.clone().text().then(function (texto) {
-                if (textoIndicaCaptcha(texto)) { ativarModoCaptcha(); }
+                if (textoIndicaCaptcha(texto)) { conferirCaptchaNoDom(); }
               }).catch(function () {});
             } catch (e) {}
             return resposta;
@@ -326,7 +380,7 @@
         var xhr = this;
         try {
           xhr.addEventListener('load', function () {
-            try { if (textoIndicaCaptcha(xhr.responseText)) { ativarModoCaptcha(); } } catch (e) {}
+            try { if (textoIndicaCaptcha(xhr.responseText)) { conferirCaptchaNoDom(); } } catch (e) {}
           });
         } catch (e) {}
         return xhrSendOriginal.apply(xhr, arguments);
@@ -1377,6 +1431,10 @@
             ["watchtower", "Torre de Vigia"],
             ["snob", "Academia"],
             ["statue", "Estátua"],
+            ["church", "Igreja"],
+            ["wood", "Bosque"],
+            ["stone", "Poço de Argila"],
+            ["iron", "Mina de Ferro"],
           ];
     
           var buildingOptions = [["", "-- Prédio (catapulta) --"]]
